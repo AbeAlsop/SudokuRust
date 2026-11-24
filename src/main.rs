@@ -196,6 +196,61 @@ impl Board {
         Ok(changes)
     }
 
+    // AI-generated function to generalize pairs_and_triplets
+    // It's educational, but doesn't seem to solve any additional puzzles
+//     fn pairs_and_triplets(mut cells: [&mut Cell; 9]) -> u16 {
+//         let mut changes = 0;
+//
+//         // Try subsets of 2 through 6 cells, smaller subsets first.
+//         for size in 2..=6 {
+//             for subset in 0u16..(1 << 9) {
+//                 if subset.count_ones() != size {
+//                     continue;
+//                 }
+//
+//                 let mut possible = [false; 9];
+//                 let mut valid = true;
+//
+//                 // Find the union of candidates for the selected cells.
+//                 for (i, cell) in cells.iter().enumerate() {
+//                     if subset & (1 << i) == 0 {
+//                         continue;
+//                     }
+//
+//                     if cell.value.is_some() {
+//                         valid = false;
+//                         break;
+//                     }
+//
+//                     for (union, candidate) in possible.iter_mut().zip(cell.possible) {
+//                         *union |= candidate;
+//                     }
+//                 }
+//
+//                 if !valid || possible.iter().filter(|&&p| p).count() != size as usize {
+//                     continue;
+//                 }
+//
+//                 // Remove those candidates from all other unsolved cells.
+//                 for (i, cell) in cells.iter_mut().enumerate() {
+//                     if subset & (1 << i) != 0 || cell.value.is_some() {
+//                         continue;
+//                     }
+//
+//                     for (candidate, &remove) in possible.iter().enumerate() {
+//                         if remove && cell.possible[candidate] {
+//                             cell.not_possible(candidate + 1);
+//                             changes += 1;
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//
+//         changes
+//     }
+
+    // look for naked pairs, triples, and also quadruples
     fn pairs_and_triplets(cells: [&mut Cell; 9]) -> u16 {
         let mut count = 0;
         for x in 0..9 {
