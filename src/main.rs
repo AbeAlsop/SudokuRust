@@ -44,11 +44,6 @@ impl Cell {
         self.possible[value-1]
     }
 
-    fn count_possible(&self) -> usize
-    {
-        self.possible.iter().filter(|&&p| p).count()
-    }
-
     // value must be 1..9
     fn not_possible(&mut self, value: usize)
     {
@@ -128,29 +123,31 @@ impl Board {
         // check quads
         for quad_x in 0..3 {
             for quad_y in 0..3 {
-                let quad: [&mut Cell; 9] = self.cells[quad_x][quad_y]
+                let mut quad: [&mut Cell; 9] = self.cells[quad_x][quad_y]
                     .iter_mut()
                     .flatten()
                     .collect::<Vec<_>>()
                     .try_into()
                     .expect("a quadrant has exactly 9 cells");
-                self.moves += Board::check_set(quad, format!("quad {}", quad_x*3+quad_y+1))?;
+                self.moves += Board::check_set(&mut quad, format!("quad {}", quad_x*3+quad_y+1))?;
+                self.moves += Board::pairs_and_triplets(quad);
             }
         }
         for quad_x in 0..3 {
             for cell_x in 0..3 {
-                let r: [&mut Cell; 9] = self.cells[quad_x]
+                let mut r: [&mut Cell; 9] = self.cells[quad_x]
                     .iter_mut()
                     .flat_map(|col| col[cell_x].iter_mut())
                     .collect::<Vec<_>>()
                     .try_into()
                     .expect("a row has exactly 9 cells");
-                self.moves += Board::check_set(r, format!("row {}", quad_x*3+cell_x+1))?;
+                self.moves += Board::check_set(&mut r, format!("row {}", quad_x*3+cell_x+1))?;
+                self.moves += Board::pairs_and_triplets(r);
             }
         }
         for quad_y in 0..3 {
             for cell_y in 0..3 {
-                let c: [&mut Cell; 9] = self.cells
+                let mut c: [&mut Cell; 9] = self.cells
                     .iter_mut()
                     .flat_map(|r| {
                         r[quad_y].iter_mut()
@@ -159,14 +156,15 @@ impl Board {
                     .collect::<Vec<_>>()
                     .try_into()
                     .expect("a column has exactly 9 cells");
-                self.moves += Board::check_set(c, format!("column {}", quad_y*3+cell_y+1))?;
+                self.moves += Board::check_set(&mut c, format!("column {}", quad_y*3+cell_y+1))?;
+                self.moves += Board::pairs_and_triplets(c)
             }
         }
         Ok(())
     }
 
     // returns number of changes made, or error if inconsistency
-    fn check_set(cells: [&mut Cell; 9], set_name: String) -> Result<u16, String> {
+    fn check_set(cells: &mut [&mut Cell; 9], set_name: String) -> Result<u16, String> {
         let mut changes:u16 = 0;
         for cell in 0..9 {
             let mut unique_possibilities = if cells[cell].value.is_none() { cells[cell].possible.clone() } else { [false; 9] };
@@ -196,6 +194,74 @@ impl Board {
             }
         }
         Ok(changes)
+    }
+
+    fn pairs_and_triplets(cells: [&mut Cell; 9]) -> u16 {
+        let mut count = 0;
+        for x in 0..9 {
+            if cells[x].value.is_none() {
+                for y in x+1..9 {
+                    if cells[y].value.is_none() {
+                        let mut pair_unique = cells[x].possible.clone();
+                        for (p1,p2) in pair_unique.iter_mut().zip(cells[y].possible) {
+                            *p1 |= p2;
+                        }
+                        // if only 2 possibilities, remove them from all other cells in this set
+                        if pair_unique.iter().filter(|p| **p).count()==2 {
+                            for p in (0..9).filter(|p| pair_unique[*p]) {
+                                for c in (0..9).filter(|c| *c!=x && *c!=y) {
+                                    if cells[c].value.is_none() && cells[c].possible[p] {
+                                        cells[c].not_possible(p+1);
+                                        count+=1;
+                                    }
+                                }
+                            }
+                        }
+                        // if 3 possibilities and there is a third cell with the same three, remove them from all other cells in this set
+                        else if pair_unique.iter().filter(|p| **p).count()==3 {
+                            for z in y+1..9 {
+                                if cells[z].value.is_none() {
+                                    let mut trio_unique = pair_unique.clone();
+                                    for (p1,p2) in trio_unique.iter_mut().zip(cells[z].possible) {
+                                        *p1 |= p2;
+                                    }
+                                    if trio_unique.iter().filter(|p| **p).count()==3 {
+                                        for p in (0..9).filter(|p| trio_unique[*p]) {
+                                            for c in (0..9).filter(|c| *c!=x && *c!=y && *c!=z) {
+                                                if cells[c].value.is_none() && cells[c].possible[p] {
+                                                    cells[c].not_possible(p+1);
+                                                    count+=1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // now looking for quadruples
+                                    for q in z+1..9 {
+                                        if cells[q].value.is_none() {
+                                            let mut quad_unique = trio_unique.clone();
+                                            for (p1,p2) in quad_unique.iter_mut().zip(cells[q].possible) {
+                                                *p1 |= p2;
+                                            }
+                                            if quad_unique.iter().filter(|p| **p).count()==4 {
+                                                for p in (0..9).filter(|p| quad_unique[*p]) {
+                                                    for c in (0..9).filter(|c| *c!=x && *c!=y && *c!=z && *c!=q) {
+                                                        if cells[c].value.is_none() && cells[c].possible[p] {
+                                                            cells[c].not_possible(p+1);
+                                                            count+=1;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        count
     }
 
     fn find_intersections(&mut self) {
@@ -257,20 +323,6 @@ impl Board {
     fn handle_intersection(intersection: [&mut Cell; 3], mut quad_others: [&mut Cell; 6], mut line_others: [&mut Cell; 6]) -> u16
     {
         let mut changes = 0;
-        // matched pair in intersection clears those possibilities everywhere else
-        if intersection[0].count_possible()==2 && (intersection[0]==intersection[1] || intersection[0]==intersection[2]) {
-            changes += Board::remove_these_possibilities(intersection[0].possible, &mut quad_others);
-            changes += Board::remove_these_possibilities(intersection[0].possible, &mut line_others);
-        }
-        if intersection[1].count_possible()==2 && intersection[1]==intersection[2] {
-            changes += Board::remove_these_possibilities(intersection[1].possible, &mut quad_others);
-            changes += Board::remove_these_possibilities(intersection[1].possible, &mut line_others);
-        }
-        // matched triplet in intersection clears those possibilities everywhere else
-        if intersection[0].count_possible()==3 && intersection[0]==intersection[1] && intersection[0]==intersection[2] {
-            changes += Board::remove_these_possibilities(intersection[0].possible, &mut quad_others);
-            changes += Board::remove_these_possibilities(intersection[0].possible, &mut line_others);
-        }
 
         // a number that is only possible in intersection clears its possibilities from the other set
         let mut intersection_possibles = [false; 9];
@@ -355,7 +407,7 @@ impl Board {
             }
         }
     }
-    #[cfg(test)]
+
     fn debug_board(&self)
     {
         for quad_x in 0..3 {
@@ -407,7 +459,7 @@ fn solve_puzzle(mut board: Board) {
         }
         if board.moves==moves {
             println!(">>>>>>>>>>> stuck after {i} iterations and {moves} changes");
-            board.print_board();
+            board.debug_board();
             break;
         }
 
@@ -433,7 +485,22 @@ mod tests {
             [0,0,7,0,0,8,6,0,0],
             [0,0,0,0,2,0,4,0,0]
         ]);
-        board.debug_board();
+        solve_puzzle(board);
+    }
+
+    #[test]
+    fn harder_puzzle() {
+        let board = Board::from_grid([
+            [0,0,0,5,0,0,0,3,1],
+            [4,0,0,0,8,0,7,0,0],
+            [9,0,6,0,1,0,0,0,0],
+            [0,0,0,0,0,3,0,6,0],
+            [0,0,4,0,0,0,9,0,0],
+            [0,5,0,4,0,0,0,0,0],
+            [0,0,0,0,4,0,1,0,8],
+            [0,0,8,0,3,0,0,0,7],
+            [2,7,0,0,0,5,0,0,0]
+        ]);
         solve_puzzle(board);
     }
 }
