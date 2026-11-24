@@ -3,28 +3,18 @@ use std::io;
 fn main() {
     println!("Enter your starting Sudoku board, 9 digits per line");
     let mut board = Board::read_board();
-    board.print_board();
-    let mut moves = board.moves;
+
     match board.check_possibles() {
         Ok(_) => println!("No errors"),
         Err(message) => {
-            board.print_board();
             println!("Validation error: {message}")
         }
     }
-    while moves != board.moves {
-        moves = board.moves;
-        println!(">>>>>>>>>>> {moves} moves so far");
-        board.print_board();
-        if let Err(message) = board.check_possibles() {
-            println!("Validation error: {message}");
-        }
-    }
-    println!(">>>>>>>>>>> Final:");
-    board.debug_board();
+
+    solve_puzzle(board);
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct Cell {
     value: Option<usize>,
     possible: [bool; 9]
@@ -52,6 +42,11 @@ impl Cell {
     fn is_possible(&self, value: usize) -> bool
     {
         self.possible[value-1]
+    }
+
+    fn count_possible(&self) -> usize
+    {
+        self.possible.iter().filter(|&&p| p).count()
     }
 
     // value must be 1..9
@@ -84,6 +79,25 @@ impl Board {
         }
     }
 
+    #[cfg(test)]
+    fn from_grid(grid: [[usize; 9]; 9]) -> Self {
+        let mut board = Self::new();
+        for (row, values) in grid.iter().enumerate() {
+            for (column, &value) in values.iter().enumerate() {
+                if value != 0 {
+                    board.set_value(
+                        row / 3,
+                        column / 3,
+                        row % 3,
+                        column % 3,
+                        value,
+                    );
+                }
+            }
+        }
+        board
+    }
+
     // x and y values must be 0..2
     fn get_value(&self, quad_x: usize, quad_y: usize, cell_x: usize, cell_y: usize) -> Option<usize>
     {
@@ -93,6 +107,21 @@ impl Board {
     fn set_value(&mut self, quad_x: usize, quad_y: usize, cell_x: usize, cell_y: usize, value: usize)
     {
         self.cells[quad_x][quad_y][cell_x][cell_y].set_value(value);
+    }
+
+    fn is_solved(&self) -> bool {
+        for quad_x in 0..3 {
+            for cell_x in 0..3 {
+                for quad_y in 0..3 {
+                    for cell_y in 0..3 {
+                        if self.cells[quad_x][quad_y][cell_x][cell_y].value.is_none() {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     fn check_possibles(&mut self) -> Result<(), String> {
@@ -169,6 +198,121 @@ impl Board {
         Ok(changes)
     }
 
+    fn find_intersections(&mut self) {
+        for quad_x in 0..3 {
+            for quad_y in 0..3 {
+                // intersection of quad and row
+                for cell_x in 0..3 {
+                    let mut intersection: Vec<&mut Cell> = Vec::new();
+                    let mut quad_others: Vec<&mut Cell> = Vec::new();
+                    let mut line_others: Vec<&mut Cell> = Vec::new();
+                    for (qy, quad) in self.cells[quad_x].iter_mut().enumerate() {
+                        for (x, cell_row) in quad.iter_mut().enumerate() {
+                            for cell in cell_row.iter_mut() {
+                                if qy == quad_y && x == cell_x {
+                                    intersection.push(cell);
+                                } else if qy == quad_y {
+                                    quad_others.push(cell);
+                                } else if x == cell_x {
+                                    line_others.push(cell);
+                                }
+                            }
+                        }
+                    }
+                    self.moves += Board::handle_intersection(
+                        intersection.try_into().expect("intersection has exactly 3 cells"),
+                        quad_others.try_into().expect("quad_others has exactly 6 cells"),
+                        line_others.try_into().expect("line_others has exactly 6 cells")
+                    );
+                }
+
+                // intersection of quad and column
+                for cell_y in 0..3 {
+                    let mut intersection: Vec<&mut Cell> = Vec::new();
+                    let mut quad_others: Vec<&mut Cell> = Vec::new();
+                    let mut line_others: Vec<&mut Cell> = Vec::new();
+                    for (qx, quad) in self.cells.iter_mut().map(|c| &mut c[quad_y]).enumerate() {
+                        for cell_col in quad.iter_mut() {
+                            for (y, cell) in cell_col.iter_mut().enumerate() {
+                                if qx == quad_x && y == cell_y {
+                                    intersection.push(cell);
+                                } else if qx == quad_x {
+                                    quad_others.push(cell);
+                                } else if y == cell_y {
+                                    line_others.push(cell);
+                                }
+                            }
+                        }
+                    }
+                    self.moves += Board::handle_intersection(
+                        intersection.try_into().expect("intersection has exactly 3 cells"),
+                        quad_others.try_into().expect("quad_others has exactly 6 cells"),
+                        line_others.try_into().expect("line_others has exactly 6 cells")
+                    );
+                }
+            }
+        }
+    }
+
+    fn handle_intersection(intersection: [&mut Cell; 3], mut quad_others: [&mut Cell; 6], mut line_others: [&mut Cell; 6]) -> u16
+    {
+        let mut changes = 0;
+        // matched pair in intersection clears those possibilities everywhere else
+        if intersection[0].count_possible()==2 && (intersection[0]==intersection[1] || intersection[0]==intersection[2]) {
+            changes += Board::remove_these_possibilities(intersection[0].possible, &mut quad_others);
+            changes += Board::remove_these_possibilities(intersection[0].possible, &mut line_others);
+        }
+        if intersection[1].count_possible()==2 && intersection[1]==intersection[2] {
+            changes += Board::remove_these_possibilities(intersection[1].possible, &mut quad_others);
+            changes += Board::remove_these_possibilities(intersection[1].possible, &mut line_others);
+        }
+        // matched triplet in intersection clears those possibilities everywhere else
+        if intersection[0].count_possible()==3 && intersection[0]==intersection[1] && intersection[0]==intersection[2] {
+            changes += Board::remove_these_possibilities(intersection[0].possible, &mut quad_others);
+            changes += Board::remove_these_possibilities(intersection[0].possible, &mut line_others);
+        }
+
+        // a number that is only possible in intersection clears its possibilities from the other set
+        let mut intersection_possibles = [false; 9];
+        for i in 0..3 {
+            for (p1,p2) in intersection_possibles.iter_mut().zip(intersection[i].possible) {
+                *p1 |= p2;
+            }
+        }
+
+        let mut unique_to_quad = intersection_possibles.clone();
+        for i in 0..6 {
+            for (p1,p2) in unique_to_quad.iter_mut().zip(quad_others[i].possible) {
+                *p1 &= !p2;
+            }
+        }
+        changes += Board::remove_these_possibilities(unique_to_quad, &mut line_others);
+
+        let mut unique_to_line = intersection_possibles.clone();
+        for i in 0..6 {
+            for (p1,p2) in unique_to_line.iter_mut().zip(line_others[i].possible) {
+                *p1 &= !p2;
+            }
+        }
+        changes += Board::remove_these_possibilities(unique_to_line, &mut quad_others);
+        changes
+    }
+
+    fn remove_these_possibilities(remove: [bool; 9], cell: &mut [&mut Cell;6]) -> u16 {
+        let mut changes = 0;
+        for i in 0..9 {
+            if remove[i] {
+                for c in 0..6 {
+                    if cell[c].is_possible(i+1) {
+                        cell[c].not_possible(i+1);
+                        changes+=1;
+                    }
+                }
+            }
+        }
+        changes
+    }
+
     fn read_board() -> Board {
         let mut board = Board::new();
         for quad_x in 0..3 {
@@ -211,6 +355,7 @@ impl Board {
             }
         }
     }
+    #[cfg(test)]
     fn debug_board(&self)
     {
         for quad_x in 0..3 {
@@ -237,8 +382,58 @@ impl Board {
                 println!();
             }
             if quad_x < 2 {
-                println!("---+---+---");
+                println!("---------------+---------------+---------------");
             }
         }
+    }
+}
+
+fn solve_puzzle(mut board: Board) {
+    let mut i = 0;
+    loop {
+        board.print_board();
+        let moves = board.moves;
+
+        if let Err(message) = board.check_possibles() {
+            println!("Validation error: {message}");
+            break;
+        }
+        board.find_intersections();
+
+        if board.is_solved() {
+            println!(">>>>>>>>>>> SOLVED after {i} iterations and {moves} changes");
+            board.print_board();
+            break;
+        }
+        if board.moves==moves {
+            println!(">>>>>>>>>>> stuck after {i} iterations and {moves} changes");
+            board.print_board();
+            break;
+        }
+
+        println!(">>>>>>>>>>> {i} iterations and {moves} changes so far");
+        i+=1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_puzzle() {
+        let board = Board::from_grid([
+            [0,0,8,0,7,0,0,0,0],
+            [0,0,5,9,0,0,3,0,0],
+            [0,4,0,0,0,1,0,6,9],
+            [0,0,6,0,0,0,0,9,0],
+            [1,0,0,0,0,0,0,0,5],
+            [0,8,0,0,0,0,2,0,0],
+            [3,6,0,4,0,0,0,7,0],
+            [0,0,7,0,0,8,6,0,0],
+            [0,0,0,0,2,0,4,0,0]
+        ]);
+        board.debug_board();
+        solve_puzzle(board);
     }
 }
