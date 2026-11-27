@@ -1,17 +1,81 @@
 use std::io;
 
+enum Solution {
+    Invalid(String, u16),
+    Stuck(u16),
+    Success(u16)
+}
+
 fn main() {
     println!("Enter your starting Sudoku board, 9 digits per line");
     let mut board = Board::read_board();
 
-    match board.check_possibles() {
-        Ok(_) => println!("No errors"),
-        Err(message) => {
-            println!("Validation error: {message}")
+    match solve_puzzle(&mut board) {
+        Solution::Invalid(message, 0) => {
+            println!("Invalid puzzle: {message}");
+            board.print_board()
+        }
+        Solution::Invalid(message, iterations) => {
+            println!("Bug caused invalid puzzle after {iterations} iterations: {message}");
+            board.debug_board();
+        }
+        Solution::Stuck(iterations) => {
+            println!("Stuck after {iterations} iterations");
+            board.debug_board();
+        }
+        Solution::Success(iterations) => {
+            println!("Solved puzzle after {iterations} iterations");
+            board.print_board();
         }
     }
+}
 
-    solve_puzzle(board);
+fn solve_puzzle(board: &mut Board) -> Solution {
+    let mut i = 0;
+    loop {
+        board.print_board();
+        let moves = board.moves;
+
+        if let Err(message) = board.apply_to_sets(Board::check_set) {
+            return Solution::Invalid(message, i);
+        }
+        i+=1;
+
+        if let Err(message) = board.apply_to_sets(Board::pairs_and_triplets) {
+            return Solution::Invalid(message, i);
+        }
+
+        if board.is_solved() {
+            return Solution::Success(i)
+        }
+        if board.moves > moves {
+            println!(">>>>>>>>>>> Making progress after {i} iterations and {moves} changes");
+            continue;
+        }
+
+        // less common operations
+        board.find_intersections();
+        if board.moves > moves {
+            println!(">>>>>>>>>>> Required find_intersections after {i} iterations to make {} moves", board.moves - moves);
+            if board.is_solved() {
+                return Solution::Success(i)
+            }
+            continue;
+        }
+
+        if let Err(message) = board.apply_to_sets(Board::naked_subsets) {
+            return Solution::Invalid(message, i);
+        }
+        if board.moves > moves {
+            println!(">>>>>>>>>>> Required naked_subsets function after {i} iterations to make {} moves", board.moves - moves);
+            if board.is_solved() {
+                return Solution::Success(i)
+            }
+            continue;
+        }
+
+        return Solution::Stuck(i);
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -119,7 +183,8 @@ impl Board {
         return true;
     }
 
-    fn check_possibles(&mut self) -> Result<(), String> {
+    fn apply_to_sets(&mut self, rule: fn(&mut [&mut Cell; 9], String) -> Result<u16, String>) -> Result<(), String>
+    {
         // check quads
         for quad_x in 0..3 {
             for quad_y in 0..3 {
@@ -129,8 +194,7 @@ impl Board {
                     .collect::<Vec<_>>()
                     .try_into()
                     .expect("a quadrant has exactly 9 cells");
-                self.moves += Board::check_set(&mut quad, format!("quad {}", quad_x*3+quad_y+1))?;
-                self.moves += Board::pairs_and_triplets(quad);
+                self.moves += rule(&mut quad, format!("quad {}", quad_x*3+quad_y+1))?;
             }
         }
         for quad_x in 0..3 {
@@ -141,8 +205,7 @@ impl Board {
                     .collect::<Vec<_>>()
                     .try_into()
                     .expect("a row has exactly 9 cells");
-                self.moves += Board::check_set(&mut r, format!("row {}", quad_x*3+cell_x+1))?;
-                self.moves += Board::pairs_and_triplets(r);
+                self.moves += rule(&mut r, format!("row {}", quad_x*3+cell_x+1))?;
             }
         }
         for quad_y in 0..3 {
@@ -156,8 +219,7 @@ impl Board {
                     .collect::<Vec<_>>()
                     .try_into()
                     .expect("a column has exactly 9 cells");
-                self.moves += Board::check_set(&mut c, format!("column {}", quad_y*3+cell_y+1))?;
-                self.moves += Board::pairs_and_triplets(c)
+                self.moves += rule(&mut c, format!("column {}", quad_y*3+cell_y+1))?;
             }
         }
         Ok(())
@@ -196,62 +258,8 @@ impl Board {
         Ok(changes)
     }
 
-    // AI-generated function to generalize pairs_and_triplets
-    // It's educational, but doesn't seem to solve any additional puzzles
-//     fn pairs_and_triplets(mut cells: [&mut Cell; 9]) -> u16 {
-//         let mut changes = 0;
-//
-//         // Try subsets of 2 through 6 cells, smaller subsets first.
-//         for size in 2..=6 {
-//             for subset in 0u16..(1 << 9) {
-//                 if subset.count_ones() != size {
-//                     continue;
-//                 }
-//
-//                 let mut possible = [false; 9];
-//                 let mut valid = true;
-//
-//                 // Find the union of candidates for the selected cells.
-//                 for (i, cell) in cells.iter().enumerate() {
-//                     if subset & (1 << i) == 0 {
-//                         continue;
-//                     }
-//
-//                     if cell.value.is_some() {
-//                         valid = false;
-//                         break;
-//                     }
-//
-//                     for (union, candidate) in possible.iter_mut().zip(cell.possible) {
-//                         *union |= candidate;
-//                     }
-//                 }
-//
-//                 if !valid || possible.iter().filter(|&&p| p).count() != size as usize {
-//                     continue;
-//                 }
-//
-//                 // Remove those candidates from all other unsolved cells.
-//                 for (i, cell) in cells.iter_mut().enumerate() {
-//                     if subset & (1 << i) != 0 || cell.value.is_some() {
-//                         continue;
-//                     }
-//
-//                     for (candidate, &remove) in possible.iter().enumerate() {
-//                         if remove && cell.possible[candidate] {
-//                             cell.not_possible(candidate + 1);
-//                             changes += 1;
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//
-//         changes
-//     }
-
-    // look for naked pairs, triples, and also quadruples
-    fn pairs_and_triplets(cells: [&mut Cell; 9]) -> u16 {
+    // look for naked pairs or triples
+    fn pairs_and_triplets(cells: &mut [&mut Cell; 9], _ : String) -> Result<u16, String> {
         let mut count = 0;
         for x in 0..9 {
             if cells[x].value.is_none() {
@@ -290,25 +298,6 @@ impl Board {
                                             }
                                         }
                                     }
-                                    // now looking for quadruples
-                                    for q in z+1..9 {
-                                        if cells[q].value.is_none() {
-                                            let mut quad_unique = trio_unique.clone();
-                                            for (p1,p2) in quad_unique.iter_mut().zip(cells[q].possible) {
-                                                *p1 |= p2;
-                                            }
-                                            if quad_unique.iter().filter(|p| **p).count()==4 {
-                                                for p in (0..9).filter(|p| quad_unique[*p]) {
-                                                    for c in (0..9).filter(|c| *c!=x && *c!=y && *c!=z && *c!=q) {
-                                                        if cells[c].value.is_none() && cells[c].possible[p] {
-                                                            cells[c].not_possible(p+1);
-                                                            count+=1;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -316,7 +305,61 @@ impl Board {
                 }
             }
         }
-        count
+        Ok(count)
+    }
+
+    // AI-generated function to generalize pairs_and_triplets
+    // It's educational, but doesn't seem to solve any additional puzzles
+    fn naked_subsets(cells: &mut [&mut Cell; 9], _ : String) -> Result<u16, String> {
+        let mut changes = 0;
+
+        // Try subsets of 2 through 6 cells, smaller subsets first.
+        for size in 2..=6 {
+            for subset in 0u16..(1 << 9) {
+                if subset.count_ones() != size {
+                    continue;
+                }
+
+                let mut possible = [false; 9];
+                let mut valid = true;
+
+                // Find the union of candidates for the selected cells.
+                for (i, cell) in cells.iter().enumerate() {
+                    if subset & (1 << i) == 0 {
+                        continue;
+                    }
+
+                    if cell.value.is_some() {
+                        valid = false;
+                        break;
+                    }
+
+                    for (union, candidate) in possible.iter_mut().zip(cell.possible) {
+                        *union |= candidate;
+                    }
+                }
+
+                if !valid || possible.iter().filter(|&&p| p).count() != size as usize {
+                    continue;
+                }
+
+                // Remove those candidates from all other unsolved cells.
+                for (i, cell) in cells.iter_mut().enumerate() {
+                    if subset & (1 << i) != 0 || cell.value.is_some() {
+                        continue;
+                    }
+
+                    for (candidate, &remove) in possible.iter().enumerate() {
+                        if remove && cell.possible[candidate] {
+                            cell.not_possible(candidate + 1);
+                            changes += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(changes)
     }
 
     fn find_intersections(&mut self) {
@@ -495,41 +538,13 @@ impl Board {
     }
 }
 
-fn solve_puzzle(mut board: Board) {
-    let mut i = 0;
-    loop {
-        board.print_board();
-        let moves = board.moves;
-
-        if let Err(message) = board.check_possibles() {
-            println!("Validation error: {message}");
-            break;
-        }
-        board.find_intersections();
-
-        if board.is_solved() {
-            println!(">>>>>>>>>>> SOLVED after {i} iterations and {moves} changes");
-            board.print_board();
-            break;
-        }
-        if board.moves==moves {
-            println!(">>>>>>>>>>> stuck after {i} iterations and {moves} changes");
-            board.debug_board();
-            break;
-        }
-
-        println!(">>>>>>>>>>> {i} iterations and {moves} changes so far");
-        i+=1;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn sample_puzzle() {
-        let board = Board::from_grid([
+        let mut board = Board::from_grid([
             [0,0,8,0,7,0,0,0,0],
             [0,0,5,9,0,0,3,0,0],
             [0,4,0,0,0,1,0,6,9],
@@ -540,12 +555,25 @@ mod tests {
             [0,0,7,0,0,8,6,0,0],
             [0,0,0,0,2,0,4,0,0]
         ]);
-        solve_puzzle(board);
+        match solve_puzzle(&mut board) {
+            Solution::Success(i) => {
+                println!("Solved puzzle in {i} iterations");
+                board.print_board();
+            }
+            Solution::Invalid(_, i) => {
+                println!("Error when running sample_puzzle after {i} iterations");
+                board.debug_board();
+            }
+            Solution::Stuck(i) => {
+                println!("Could not solve sample_puzzle after {i} iterations");
+                board.debug_board();
+            }
+        }
     }
 
     #[test]
     fn harder_puzzle() {
-        let board = Board::from_grid([
+        let mut board = Board::from_grid([
             [0,0,0,5,0,0,0,3,1],
             [4,0,0,0,8,0,7,0,0],
             [9,0,6,0,1,0,0,0,0],
@@ -556,6 +584,19 @@ mod tests {
             [0,0,8,0,3,0,0,0,7],
             [2,7,0,0,0,5,0,0,0]
         ]);
-        solve_puzzle(board);
+        match solve_puzzle(&mut board) {
+            Solution::Success(i) => {
+                println!("Solved puzzle in {i} iterations");
+                board.print_board();
+            }
+            Solution::Invalid(_, i) => {
+                println!("Error when running harder_puzzle after {i} iterations");
+                board.debug_board();
+            }
+            Solution::Stuck(i) => {
+                println!("Could not solve harder_puzzle after {i} iterations");
+                board.debug_board();
+            }
+        }
     }
 }
