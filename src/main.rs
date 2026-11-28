@@ -10,13 +10,13 @@ fn main() {
     println!("Enter your starting Sudoku board, 9 digits per line");
     let mut board = Board::read_board();
 
-    match solve_puzzle(&mut board) {
+    match board.solve_puzzle() {
         Solution::Invalid(message, 0) => {
             println!("Invalid puzzle: {message}");
             board.print_board()
         }
         Solution::Invalid(message, iterations) => {
-            println!("Bug caused invalid puzzle after {iterations} iterations: {message}");
+            println!("Possible bug: invalid puzzle after {iterations} iterations: {message}");
             board.debug_board();
         }
         Solution::Stuck(iterations) => {
@@ -30,55 +30,7 @@ fn main() {
     }
 }
 
-fn solve_puzzle(board: &mut Board) -> Solution {
-    let mut i = 0;
-    loop {
-        board.print_board();
-        let moves = board.moves;
-
-        if let Err(message) = board.apply_to_sets(Board::check_set) {
-            return Solution::Invalid(message, i);
-        }
-        i+=1;
-
-        if let Err(message) = board.apply_to_sets(Board::pairs_and_triplets) {
-            return Solution::Invalid(message, i);
-        }
-
-        if board.is_solved() {
-            return Solution::Success(i)
-        }
-        if board.moves > moves {
-            println!(">>>>>>>>>>> Making progress after {i} iterations and {moves} changes");
-            continue;
-        }
-
-        // less common operations
-        board.find_intersections();
-        if board.moves > moves {
-            println!(">>>>>>>>>>> Required find_intersections after {i} iterations to make {} moves", board.moves - moves);
-            if board.is_solved() {
-                return Solution::Success(i)
-            }
-            continue;
-        }
-
-        if let Err(message) = board.apply_to_sets(Board::naked_subsets) {
-            return Solution::Invalid(message, i);
-        }
-        if board.moves > moves {
-            println!(">>>>>>>>>>> Required naked_subsets function after {i} iterations to make {} moves", board.moves - moves);
-            if board.is_solved() {
-                return Solution::Success(i)
-            }
-            continue;
-        }
-
-        return Solution::Stuck(i);
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 struct Cell {
     value: Option<usize>,
     possible: [bool; 9]
@@ -121,6 +73,7 @@ impl Cell {
     }
 }
 
+#[derive(Clone)]
 struct Board {
     cells: [[[[Cell; 3]; 3]; 3]; 3],
     moves: u16
@@ -181,6 +134,60 @@ impl Board {
             }
         }
         return true;
+    }
+
+    fn solve_puzzle(&mut self) -> Solution {
+        let mut i = 0;
+        loop {
+            self.print_board();
+            let moves = self.moves;
+
+            if let Err(message) = self.apply_to_sets(Self::check_set) {
+                return Solution::Invalid(message, i);
+            }
+            i+=1;
+
+            if let Err(message) = self.apply_to_sets(Self::pairs_and_triplets) {
+                return Solution::Invalid(message, i);
+            }
+
+            if self.is_solved() {
+                return Solution::Success(i)
+            }
+            if self.moves > moves {
+                println!(">>>>>>>>>>> Making progress after {i} iterations and {} changes", self.moves);
+                continue;
+            }
+
+            // less common operations
+            self.find_intersections();
+            if self.moves > moves {
+                println!(">>>>>>>>>>> Required find_intersections after {i} iterations to make {} moves", self.moves - moves);
+                if self.is_solved() {
+                    return Solution::Success(i)
+                }
+                continue;
+            }
+
+            if let Err(message) = self.apply_to_sets(Self::naked_subsets) {
+                return Solution::Invalid(message, i);
+            }
+            if self.moves > moves {
+                println!(">>>>>>>>>>> Required naked_subsets function after {i} iterations to make {} moves", self.moves - moves);
+                if self.is_solved() {
+                    return Solution::Success(i)
+                }
+                continue;
+            }
+
+            if let Ok(solution) = self.guess_and_check() {
+                *self = solution;
+                println!(">>>>>>>>>>> Required guessing and checking to make {} moves", self.moves - moves);
+                return Solution::Success(i)
+            } else {
+                return Solution::Stuck(i);
+            }
+        }
     }
 
     fn apply_to_sets(&mut self, rule: fn(&mut [&mut Cell; 9], String) -> Result<u16, String>) -> Result<(), String>
@@ -448,6 +455,56 @@ impl Board {
         changes
     }
 
+    fn guess_and_check(&mut self) -> Result<Board, ()> {
+        use std::sync::mpsc;
+        use std::thread;
+        for quad_x in 0..3 {
+            for cell_x in 0..3 {
+                for quad_y in 0..3 {
+                    for cell_y in 0..3 {
+                        if self.get_value(quad_x,quad_y,cell_x,cell_y).is_none() {
+                            let (guesser, receiver) = mpsc::channel();
+                            for attempt in 1..=9 {
+                                if self.cells[quad_x][quad_y][cell_x][cell_y].is_possible(attempt) {
+                                    let guesser = guesser.clone();
+                                    let mut board_guess = self.clone();
+                                    thread::spawn(move || {
+                                        println!(">>>>>>>>>>> Guessing {} in quadrant {} cell {}", attempt, quad_x*3+quad_y+1, cell_x*3+cell_y+1);
+                                        board_guess.set_value(quad_x, quad_y, cell_x, cell_y, attempt);
+                                        match board_guess.solve_puzzle() {
+                                            Solution::Success(_) => {
+                                                println!(">>>>>>>>>>> Guessing {} in quadrant {} cell {} succeeded", attempt, quad_x*3+quad_y+1, cell_x*3+cell_y+1);
+                                                let _ = guesser.send(Ok(board_guess));
+                                            }
+                                            Solution::Invalid(_,_) => {
+                                                println!(">>>>>>>>>>> Disproved {} in quadrant {} cell {}", attempt, quad_x*3+quad_y+1, cell_x*3+cell_y+1);
+                                                let _ = guesser.send(Err(()));
+                                            }
+                                            Solution::Stuck(_) => {
+                                                let _ = guesser.send(Err(()));
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                            drop(guesser);
+                            let mut new_board: Option<Board> = None;
+                            for result in receiver {
+                                if let Ok(result_board) = result {
+                                    new_board = Some(result_board);
+                                }
+                            };
+                            if let Some(new_board) = new_board {
+                                return Ok(new_board);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(())
+    }
+
     fn remove_these_possibilities(remove: [bool; 9], cell: &mut [&mut Cell;6]) -> u16 {
         let mut changes = 0;
         for i in 0..9 {
@@ -555,20 +612,7 @@ mod tests {
             [0,0,7,0,0,8,6,0,0],
             [0,0,0,0,2,0,4,0,0]
         ]);
-        match solve_puzzle(&mut board) {
-            Solution::Success(i) => {
-                println!("Solved puzzle in {i} iterations");
-                board.print_board();
-            }
-            Solution::Invalid(_, i) => {
-                println!("Error when running sample_puzzle after {i} iterations");
-                board.debug_board();
-            }
-            Solution::Stuck(i) => {
-                println!("Could not solve sample_puzzle after {i} iterations");
-                board.debug_board();
-            }
-        }
+        assert!(matches!(board.solve_puzzle(), Solution::Success(_)));
     }
 
     #[test]
@@ -584,19 +628,6 @@ mod tests {
             [0,0,8,0,3,0,0,0,7],
             [2,7,0,0,0,5,0,0,0]
         ]);
-        match solve_puzzle(&mut board) {
-            Solution::Success(i) => {
-                println!("Solved puzzle in {i} iterations");
-                board.print_board();
-            }
-            Solution::Invalid(_, i) => {
-                println!("Error when running harder_puzzle after {i} iterations");
-                board.debug_board();
-            }
-            Solution::Stuck(i) => {
-                println!("Could not solve harder_puzzle after {i} iterations");
-                board.debug_board();
-            }
-        }
+        assert!(matches!(board.solve_puzzle(), Solution::Success(_)));
     }
 }
