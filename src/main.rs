@@ -497,6 +497,7 @@ impl Board {
                             if let Some(new_board) = new_board {
                                 return Ok(new_board);
                             }
+                            return Err(());
                         }
                     }
                 }
@@ -627,6 +628,22 @@ mod tests {
             [0,0,0,0,4,0,1,0,8],
             [0,0,8,0,3,0,0,0,7],
             [2,7,0,0,0,5,0,0,0]
+        ]);
+        assert!(matches!(board.solve_puzzle(), Solution::Success(_)));
+    }
+
+    #[test]
+    fn hardest_puzzle() {
+        let mut board = Board::from_grid([
+            [0,0,0,1,0,2,0,0,0],
+            [0,6,0,0,0,0,0,7,0],
+            [0,0,8,0,0,0,9,0,0],
+            [4,0,0,0,0,0,0,0,3],
+            [0,5,0,0,0,7,0,0,0],
+            [2,0,0,0,8,0,0,0,1],
+            [0,0,9,0,0,0,8,0,5],
+            [0,7,0,0,0,0,0,6,0],
+            [0,0,0,3,0,4,0,0,0]
         ]);
         assert!(matches!(board.solve_puzzle(), Solution::Success(_)));
     }
